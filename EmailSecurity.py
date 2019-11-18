@@ -3,13 +3,14 @@ import re
 import sys
 from datetime import datetime
 import os.path
+import json
 
 def ReadDomainListFromFile(path):
     arr = []
     try:
         with open(path) as f:
             for line in f:
-                print(line)
+                #print(line)
                 arr.append(line.rstrip("\n\r"))
 
         return arr
@@ -26,10 +27,10 @@ def CheckDmarcRecord(domain_name):
     process = Popen(['dig', 'txt', domain_name2], stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
 
-    if re.findall('DMARC', stdout):
+    if re.findall('DMARC', stdout.decode('utf-8')):
         policy = ['none', 'reject', 'quarantine']
         for i in policy:
-            if re.findall(i, stdout):
+            if re.findall(i, stdout.decode('utf-8')):
                 print("    [+] DMARC record found - " + i)
                 return i
 
@@ -43,13 +44,13 @@ def CheckSpfRecord(domain_name):
     process = Popen(['dig', '-t', 'txt', domain_name], stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
     #print(stdout)
-    if re.findall('spf', stdout):
-        if re.findall('~all', stdout):
+    if re.findall('spf', stdout.decode('utf-8')):
+        if re.findall('~all', stdout.decode('utf-8')):
             #Soft-fail
             print("    [+] SPF record found, soft fail")
             return 1
 
-        elif re.findall('-all', stdout):
+        elif re.findall('-all', stdout.decode('utf-8')):
             #hard fail
             print("    [+] SPF record found, hard fail")
             return 2
@@ -67,9 +68,9 @@ def WriteToTable(file_object, string):
 
 def CreateOutputFile(file_name):
     # Create the file.
-    if sys.argv[2]:
-        print(sys.argv[2])
-        path = sys.argv[2] + "_" + datetime.now().strftime('%Y%m%d%H') + ".html"
+    if file_name:
+        print(file_name)
+        path = file_name + "_" + datetime.now().strftime('%Y%m%d%H') + ".html"
         html_file = OpenOutputFile(path)
         if not os.path.isfile(path):
             print("[*] Error - Output file can't be found")
@@ -140,20 +141,75 @@ def help():
         print("Example: ./emailsec.py /tmp/domains.txt /tmp/output html")
         exit(1)
 
+def DumpToJson(domains):
+
+    collections = {'collection': []}
+
+    for domain in domains:
+        spf_record_result = CheckSpfRecord(domain)
+
+        if spf_record_result and spf_record_result == 1:
+            # soft fail
+            spf_exist = True
+            spf_policy = "Soft"
+
+        if spf_record_result and spf_record_result == 2:
+            # hard fail
+            spf_exist = True
+            spf_policy = "Hard"
+
+
+        elif not spf_record_result:
+            # no SPF
+            spf_exist = False
+            spf_policy = "none"
+
+
+        dmarc_record_result = CheckDmarcRecord(domain)
+        if dmarc_record_result:
+            # value holds the policy
+            dmarc_exist = True
+
+        else:
+            # dmarc not found
+            dmarc_exist = False
+
+        if not dmarc_exist or not spf_exist:
+            passed = False
+        else:
+            passed = True
+
+        TempJsonObj = {
+            "domain": domain,
+            "pass": passed,
+            "datetime": datetime.now().strftime('%Y%m%d%H'),
+            "spf": [
+                {"exist": spf_exist},
+                {"policy": spf_policy}
+            ],
+            "dmarc": [
+                {"exist": dmarc_exist},
+                {"policy": dmarc_record_result}
+            ]
+        }
+        collections['collection'].append(TempJsonObj)
+        #print(collections['collection'])
+    return collections
+
+
 def main():
     help()
 
     domains = ReadDomainListFromFile(sys.argv[1])
-
-    if sys.argv[3].lower == 'html':
+    if sys.argv[3].lower() == 'html':
         html_file = CreateOutputFile(sys.argv[2])
 
         WriteToHtmlTable(domains, html_file)
         html_file.close()
 
-    elif sys.argv[3].lower == 'json':
-        pass
-
+    elif sys.argv[3].lower() == 'json':
+        result = DumpToJson(domains)
+        print(result['collection'])
 
 if __name__ == "__main__":
     main()
